@@ -1,4 +1,9 @@
 import logging
+import traceback
+
+from src.make_requests_openai import make_requests_davinci
+from utils_auth import openai_setup
+
 logging.basicConfig(level='ERROR')
 import numpy as np
 from pathlib import Path
@@ -14,15 +19,15 @@ from eval import *
 
 
 def load_model(name1, name2):
-    if "davinci" in name1:
+    if "davinci" in name1 or "gpt" in name1:
         model1 = None
         tokenizer1 = None
     else:
-        model1 = AutoModelForCausalLM.from_pretrained(name1, return_dict=True, device_map='auto')
+        model1 = AutoModelForCausalLM.from_pretrained(name1, return_dict=True, device_map='auto', default_model="gpt-35-turbo")
         model1.eval()
         tokenizer1 = AutoTokenizer.from_pretrained(name1)
 
-    if "davinci" in name2:
+    if "davinci" in name2 or "gpt" in name2:
         model2 = None
         tokenizer2 = None
     else:
@@ -34,19 +39,29 @@ def load_model(name1, name2):
 def calculatePerplexity_gpt3(prompt, modelname):
     prompt = prompt.replace('\x00','')
     responses = None
-    # Put your API key here
-    openai.api_key = "YOUR_API_KEY" # YOUR_API_KEY
+
     while responses is None:
         try:
-            responses = openai.Completion.create(
-                        engine=modelname, 
-                        prompt=prompt,
-                        max_tokens=0,
-                        temperature=1.0,
-                        logprobs=5,
-                        echo=True)
-        except openai.error.InvalidRequestError:
-            print("too long for openai API")
+            # responses = openai.Completion.create(
+            #     engine=modelname,
+            #     prompt=prompt,
+            #     max_tokens=0,
+            #     temperature=1.0,
+            #     logprobs=5,
+            #     echo=True)
+
+            responses = make_requests_davinci(
+                model_name=modelname,
+                prompt=prompt,
+                max_tokens=0,
+                temperature=1.0,
+                logprobs=5,
+                echo=True)
+
+        except:
+            traceback.print_exc()
+
+    # More about logprobs: https://cookbook.openai.com/examples/using_logprobs
     data = responses["choices"][0]["logprobs"]
     all_prob = [d for d in data["token_logprobs"] if d is not None]
     p1 = np.exp(-np.mean(all_prob))
@@ -80,14 +95,14 @@ def calculatePerplexity(sentence, model, tokenizer, gpu):
 def inference(model1, model2, tokenizer1, tokenizer2, text, ex, modelname1, modelname2):
     pred = {}
 
-    if "davinci" in modelname1:
+    if "davinci" in modelname1 or "gpt" in modelname1:
         p1, all_prob, p1_likelihood = calculatePerplexity_gpt3(text, modelname1) 
         p_lower, _, p_lower_likelihood = calculatePerplexity_gpt3(text.lower(), modelname1)
     else:
         p1, all_prob, p1_likelihood = calculatePerplexity(text, model1, tokenizer1, gpu=model1.device)
         p_lower, _, p_lower_likelihood = calculatePerplexity(text.lower(), model1, tokenizer1, gpu=model1.device)
 
-    if "davinci" in modelname2:
+    if "davinci" in modelname2 or "gpt" in modelname2:
         p_ref, all_prob_ref, p_ref_likelihood = calculatePerplexity_gpt3(text, modelname2)
     else:
         p_ref, all_prob_ref, p_ref_likelihood = calculatePerplexity(text, model2, tokenizer2, gpu=model2.device)
@@ -128,6 +143,8 @@ if __name__ == '__main__':
     args = args.parser.parse_args()
     args.output_dir = f"{args.output_dir}/{args.target_model}_{args.ref_model}/{args.key_name}"
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    client = openai_setup(mode="openaiazure", idx_auth=args.idx_auth, default_model=args.target_model)
 
     # load model and data
     model1, model2, tokenizer1, tokenizer2 = load_model(args.target_model, args.ref_model)
